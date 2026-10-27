@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>File2Excel — Chuyển ảnh / PDF / Excel sang Excel</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root { --primary:#2563eb; --bg:#f1f5f9; --card:#fff; --border:#e2e8f0; --text:#0f172a; --muted:#64748b; }
+  * { box-sizing:border-box; margin:0; padding:0; font-family:"Segoe UI",system-ui,sans-serif; }
+  body { background:var(--bg); color:var(--text); min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:24px 16px; }
+  header { text-align:center; margin-bottom:24px; }
+  header h1 { font-size:1.8rem; color:var(--primary); }
+  header p { color:var(--muted); margin-top:6px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:24px; width:100%; max-width:860px; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .drop { border:2px dashed var(--border); border-radius:10px; padding:40px 20px; text-align:center; cursor:pointer; transition:border-color .2s, background .2s; }
+  .drop:hover, .drop.dragover { border-color:var(--primary); background:#eff6ff; }
+  .drop input { display:none; }
+  .drop .icon { font-size:2.4rem; }
+  .drop p { margin-top:8px; color:var(--muted); }
+  .filelist { margin-top:16px; }
+  .file-item { display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border:1px solid var(--border); border-radius:8px; margin-bottom:8px; font-size:.92rem; gap:10px; }
+  .file-item .status { font-size:.82rem; color:var(--muted); white-space:nowrap; }
+  .file-item .status.ok { color:#16a34a; }
+  .file-item .status.err { color:#dc2626; }
+  .bar { height:6px; border-radius:3px; background:var(--border); overflow:hidden; margin-top:6px; }
+  .bar > div { height:100%; width:0; background:var(--primary); transition:width .3s; }
+  button { background:var(--primary); color:#fff; border:none; border-radius:8px; padding:10px 20px; font-size:.95rem; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  button.ghost { background:transparent; color:var(--primary); border:1px solid var(--primary); }
+  .actions { margin-top:16px; display:flex; gap:10px; justify-content:flex-end; }
+  details.settings { margin-top:18px; font-size:.9rem; }
+  details.settings summary { cursor:pointer; color:var(--muted); }
+  details.settings .grid { display:grid; gap:10px; margin-top:12px; }
+  details.settings label { display:block; font-weight:600; margin-bottom:4px; }
+  details.settings input, details.settings select { width:100%; padding:8px; border:1px solid var(--border); border-radius:6px; font-size:.9rem; }
+  .hint { color:var(--muted); font-size:.82rem; margin-top:4px; }
+  .privacy { margin-top:16px; text-align:center; color:var(--muted); font-size:.82rem; }
+  table.preview, table.preview th, table.preview td { border:1px solid var(--border); border-collapse:collapse; font-size:.8rem; padding:4px 8px; margin-top:12px; max-width:100%; }
+  table.preview th { background:#f8fafc; }
+  .previewwrap { overflow-x:auto; max-height:320px; }
+  footer { margin-top:24px; color:var(--muted); font-size:.8rem; text-align:center; }
+  footer a { color:var(--primary); }
+</style>
+</head>
+<body>
+<header>
+  <h1>📄 File2Excel</h1>
+  <p>Chuyển đổi ảnh / PDF / Excel sang Excel — mọi xử lý diễn ra ngay trên trình duyệt của bạn.</p>
+</header>
+
+<div class="card">
+  <div class="drop" id="drop">
+    <div class="icon">📥</div>
+    <div><b>Kéo thả file vào đây</b> hoặc bấm để chọn file</div>
+    <p>Hỗ trợ: PDF, ảnh (JPG/PNG/…), Excel (XLSX/XLS/CSV)</p>
+    <input type="file" id="fileInput" multiple accept=".pdf,.jpg,.jpeg,.png,.bmp,.webp,.xlsx,.xls,.csv">
+  </div>
+  <div class="filelist" id="filelist"></div>
+  <div class="previewwrap" id="previewwrap"></div>
+  <div class="actions">
+    <button class="ghost" id="clearBtn" disabled>Xóa hết</button>
+    <button id="convertBtn" disabled>Chuyển đổi</button>
+    <button id="downloadBtn" disabled>Tải Excel</button>
+  </div>
+
+  <details class="settings">
+    <summary>⚙️ Cấu hình OCR (dành cho ảnh)</summary>
+    <div class="grid">
+      <div>
+        <label for="ocrEndpoint">OCR API Endpoint</label>
+        <input id="ocrEndpoint" placeholder="https://ví-dụ-api.com/vision/ocr">
+        <div class="hint">Endpoint nhận POST, body JSON: <code>{ imageBase64, mimeType }</code>, trả về <code>{ text }</code> hoặc <code>{ lines: [...] }</code>.</div>
+      </div>
+      <div>
+        <label for="ocrKey">API Key (Authorization: Bearer …)</label>
+        <input id="ocrKey" type="password" placeholder="Bearer token của bạn">
+      </div>
+      <div>
+        <label for="pdfMode">Chế độ xử lý PDF</label>
+        <select id="pdfMode">
+          <option value="auto" selected>Tự động (bắt vị trí ô theo layout)</option>
+          <option value="plain">Chỉ lấy văn bản thô (mỗi dòng 1 ô)</option>
+        </select>
+      </div>
+      <div>
+        <label><input type="checkbox" id="oneSheet"> Gộp tất cả trang/file vào 1 sheet duy nhất</label>
+      </div>
+    </div>
+  </details>
+
+  <div class="privacy">🔒 100% xử lý tại máy bạn — Excel/PDF/CSV không gửi đi đâu. Riêng với ảnh, nội dung được gửi tới OCR API bạn tự cấu hình ở trên.</div>
+</div>
+
+<footer>Công cụ độc lập — chạy hoàn toàn phía client · <a href="https://github.com/" id="repoLink">GitHub</a></footer>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+const $ = id => document.getElementById(id);
+const cdnRepo = "datkep92/file2excel";
+$("repoLink").href = "https://github.com/" + cdnRepo;
+
+const settings = {
+  get endpoint(){ return localStorage.getItem("f2e_endpoint") || ""; },
+  set endpoint(v){ localStorage.setItem("f2e_endpoint", v); },
+  get key(){ return localStorage.getItem("f2e_key") || ""; },
+  set key(v){ localStorage.setItem("f2e_key", v); },
+  get pdfMode(){ return localStorage.getItem("f2e_pdfmode") || "auto"; },
+  set pdfMode(v){ localStorage.setItem("f2e_pdfmode", v); },
+  get oneSheet(){ return localStorage.getItem("f2e_onesheet") === "1"; },
+  set oneSheet(v){ localStorage.setItem("f2e_onesheet", v ? "1" : "0"); }
+};
+$("ocrEndpoint").value = settings.endpoint;
+$("ocrKey").value = settings.key;
+$("pdfMode").value = settings.pdfMode;
+$("oneSheet").checked = settings.oneSheet;
+["ocrEndpoint","ocrKey","pdfMode","oneSheet"].forEach(id => $(id).addEventListener("change", () => {
+  settings.endpoint = $("ocrEndpoint").value.trim();
+  settings.key = $("ocrKey").value.trim();
+  settings.pdfMode = $("pdfMode").value;
+  settings.oneSheet = $("oneSheet").checked;
+}));
+
+let files = []; // {file, kind, status, rows, error, progress}
+let workbookOut = null;
+
+function setStatus(i, text, cls){
+  const st = document.querySelector(`.file-item[data-i="${i}"] .status`);
+  if (st){ st.textContent = text; st.className = "status" + (cls ? " " + cls : ""); }
+  const bar = document.querySelector(`.file-item[data-i="${i}"] .bar > div`);
+  if (bar && typeof files[i].progress === "number"){ bar.style.width = (files[i].progress * 100) + "%"; }
+}
+function renderList(){
+  const el = $("filelist"); el.innerHTML = "";
+  files.forEach((f, i) => {
+    const div = document.createElement("div");
+    div.className = "file-item"; div.dataset.i = i;
+    div.innerHTML = `<span>📄 <b>${f.file.name}</b> <span style="color:var(--muted)">${(f.file.size/1024).toFixed(0)} KB</span></span>
+      <span class="status">${f.status === "done" ? "✅ Xong" : f.status === "error" ? "❌ " + f.error : "…"} </span>
+      <button class="ghost" data-del="${i}" style="padding:4px 10px">✕</button>
+      <div class="bar"><div></div></div>`;
+    div.querySelector("[data-del]").onclick = () => { files.splice(i,1); renderList(); updateButtons(); };
+    el.appendChild(div);
+  });
+  updateButtons();
+}
+function updateButtons(){
+  $("clearBtn").disabled = !files.length;
+  $("convertBtn").disabled = !files.length;
+  $("downloadBtn").disabled = !workbookOut;
+}
+
+/* ------- Xác định loại file ------- */
+async function detect(file){
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".pdf")) return "pdf";
+  if (name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".csv")) return "excel";
+  if (/\.(jpe?g|png|bmp|webp|gif|tiff?)$/.test(name)) return "image";
+  const head = new Uint8Array(await file.slice(0,8).arrayBuffer());
+  if ([0x25,0x50,0x44,0x46].every((b,j)=>head[j]===b)) return "pdf";
+  if (head[0]===0x50 && head[1]===0x4B) return "excel";
+  return null;
+}
+
+/* ------- Excel -> Excel ------- */
+async function convertExcel(item){
+  const buf = await item.file.arrayBuffer();
+  const wb = XLSX.read(buf, { type:"array" });
+  const rows = wb.SheetNames.map(n => ({ name:n, rows: XLSX.utils.sheet_to_json(wb.Sheets[n], { header:1, defval:"" }) }));
+  return rows;
+}
+
+/* ------- PDF -> bảng theo vị trí chữ ------- */
+async function convertPdf(item){
+  const buf = await item.file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const pages = [];
+  for (let p = 1; p <= pdf.numPages; p++){
+    item.progress = p / pdf.numPages; setStatus(files.indexOf(item), `Trang ${p}/${pdf.numPages}`, "");
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    if (settings.pdfMode === "plain"){
+      // gom các item cùng "y" thành dòng
+      const lines = groupByLine(tc.items, 3);
+      pages.push({ name: `Page ${p}`, rows: lines.map(l => l.items.map(i => i.str)) });
+      continue;
+    }
+    pages.push(await tableFromItems(tc.items, page.getViewport({scale:1})));
+  }
+  return pages;
+}
+
+function groupByLine(items, tol){
+  const rows = [...items].sort((a,b)=>b.transform[5]-a.transform[5]);
+  const out = [];
+  for (const it of rows){
+    const y = it.transform[5];
+    let line = out.find(l => Math.abs(l.y - y) <= tol);
+    if (!line){ line = { y, items: [] }; out.push(line); }
+    line.items.push(it);
+  }
+  out.forEach(l => l.items.sort((a,b)=>a.transform[4]-b.transform[4]));
+  return out;
+}
+
+/* dựng bảng: mỗi item là 1 ô, chia cột theo x; hàng theo y */
+async function tableFromItems(items, viewport){
+  const lines = groupByLine(items, 2.5);
+  const rows = lines.map(l => l.items.map(i => i.str));
+  return { name: "Sheet1", rows };
+}
+
+/* ------- Ảnh -> OCR qua API ngoài ------- */
+async function ocrImage(item){
+  if (!settings.endpoint) throw new Error('Chưa cấu hình OCR API Endpoint (⚙️ Cấu hình OCR)');
+  const buf = await item.file.arrayBuffer();
+  const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const res = await fetch(settings.endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(settings.key ? { "Authorization": "Bearer " + settings.key } : {})
+    },
+    body: JSON.stringify({ imageBase64: b64, mimeType: item.file.type || "image/png" })
+  });
+  if (!res.ok) throw new Error(`OCR API HTTP ${res.status} — ${await res.text().catch(()=> "").slice(0,200)}`);
+  const data = await res.json();
+  // Hỗ trợ vài dạng trả về phổ biến
+  if (Array.isArray(data.lines)) return data.lines.map(l => Array.isArray(l) ? l : [l]);
+  if (Array.isArray(data.rows)) return data.rows;
+  if (typeof data.text === "string"){
+    return data.text.split(/\r?\n/).filter(l => l.trim()).map(l => l.split(/\t|(?<=\D),\s*(?=\S)|;/).map(c => c.trim()));
+  }
+  throw new Error("Định dạng trả về OCR API không nhận được — cần { text } hoặc { lines } / { rows }");
+}
+
+/* ------- Điều phối ------- */
+async function convertAll(){
+  $("convertBtn").disabled = true;
+  const allPages = [];
+  for (let i = 0; i < files.length; i++){
+    const it = files[i];
+    try {
+      setStatus(i, "Đang đọc file…", "");
+      const kind = it.kind || await detect(it.file);
+      it.kind = kind;
+      let pages;
+      if (kind === "excel") { setStatus(i, "Đang đọc Excel…", ""); pages = await convertExcel(it); }
+      else if (kind === "pdf")   { pages = await convertPdf(it); }
+      else if (kind === "image") { setStatus(i, "Đang gửi ảnh tới OCR…", ""); pages = await ocrImage(it).then(rows => [{ name:"OCR", rows }]); }
+      else throw new Error("Định dạng chưa hỗ trợ");
+      it.rows = pages; it.status = "done";
+      setStatus(i, "✅ Xong", "ok");
+      pages.forEach(p => allPages.push(p));
+    } catch (e){
+      it.status = "error"; it.error = e.message || String(e);
+      setStatus(i, "❌ " + it.error, "err");
+    }
+  }
+  buildWorkbook(allPages);
+  showPreview(allPages.slice(0, 1));
+  updateButtons();
+}
+
+const SAFE = name => name.replace(/[\[\]\/\\:\*\?"]/g, "_").slice(0, 30) || "Sheet";
+function buildWorkbook(pages){
+  const wb = { SheetNames: [], Sheets: {} };
+  const used = {};
+  for (const p of pages){
+    let base = SAFE(p.name);
+    let name = base, n = 2;
+    while (used[name]) name = base.slice(0, 27) + "_" + n++;
+    used[name] = true;
+    const ws = XLSX.utils.aoa_to_sheet(p.rows.length ? p.rows : [["(trống)"]]);
+    wb.SheetNames.push(name); wb.Sheets[name] = ws;
+  }
+  workbookOut = wb;
+}
+function showPreview(pages){
+  $("previewwrap").innerHTML = "";
+  if (!pages.length) return;
+  const rows = pages[0].rows.slice(0, 200);
+  const table = document.createElement("table"); table.className = "preview";
+  table.innerHTML = "<caption style='caption-side:top;text-align:left;font-weight:600;padding:4px 0'>Xem trước: " +
+    pages[0].name + " (" + pages[0].rows.length + " hàng)</caption>" +
+    rows.map((r,ri) => "<tr>" + r.map(c => `<t${ri===0? "h":"d"}>${String(c ?? "").replace(/[<>&]/g, s => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[s]))}</t${ri===0?"h":"d"}>`).join("") + "</tr>").join("");
+  $("previewwrap").appendChild(table);
+}
+
+/* ------- sự kiện ------- */
+async function addFiles(list){
+  for (const f of list){
+    const kind = await detect(f);
+    if (!kind){ alert("Định dạng không hỗ trợ: " + f.name); continue; }
+    files.push({ file:f, kind, status:"pending", rows:null, progress:0 });
+  }
+  renderList();
+}
+$("fileInput").addEventListener("change", e => addFiles(e.target.files));
+const drop = $("drop");
+["dragover","dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("dragover"); }));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("dragover"); }));
+drop.addEventListener("drop", e => addFiles(e.dataTransfer.files));
+$("clearBtn").onclick = () => { files = []; workbookOut = null; renderList(); $("previewwrap").innerHTML = ""; updateButtons(); };
+$("convertBtn").onclick = () => convertAll();
+$("downloadBtn").onclick = () => {
+  if (!workbookOut) return;
+  XLSX.writeFile(workbookOut, "converted_" + new Date().toISOString().slice(0,10) + ".xlsx");
+};
+</script>
+</body>
+</html>
